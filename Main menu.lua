@@ -5,142 +5,225 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local CoreGui = game:GetService("CoreGui")
 local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
 
 local API_URL = "https://aetherial-hub.netlify.app/api/verify"
+local LocalPlayer = Players.LocalPlayer
+local Camera = Workspace.CurrentCamera
 
+-- ==========================================
+-- CONNECTION CLEANUP (prevents memory leaks & respawn errors)
+-- ==========================================
+local Connections = {}
+local function AddConnection(conn)
+    if typeof(conn) == "RBXScriptConnection" then
+        table.insert(Connections, conn)
+    end
+    return conn
+end
+
+-- ==========================================
+-- AUTHENTICATION SCREEN (Fixed infinite yield)
+-- ==========================================
 local function ShowLoadingScreen()
+    local authSuccess = false
     local sg = Instance.new("ScreenGui")
     sg.Name = "AetherialAuth"
     sg.IgnoreGuiInset = true
-    if syn and syn.protect_gui then syn.protect_gui(sg) end
-    sg.Parent = CoreGui
+    sg.ResetOnSpawn = false
     
-    local bg = Instance.new("Frame", sg)
+    if gethui then
+        sg.Parent = gethui()
+    elseif syn and syn.protect_gui then
+        pcall(syn.protect_gui, sg)
+        sg.Parent = CoreGui
+    else
+        sg.Parent = CoreGui
+    end
+    
+    local bg = Instance.new("Frame")
+    bg.Name = "Background"
     bg.Size = UDim2.new(1, 0, 1, 0)
     bg.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
     bg.BackgroundTransparency = 0.3
+    bg.Parent = sg
     
-    local window = Instance.new("Frame", bg)
-    window.Size = UDim2.new(0, 350, 0, 200)
-    window.Position = UDim2.new(0.5, -175, 0.5, -100)
+    local window = Instance.new("Frame")
+    window.Name = "Window"
+    window.Size = UDim2.new(0, 350, 0, 220)
+    window.Position = UDim2.new(0.5, -175, 0.5, -110)
     window.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+    window.Parent = bg
     
-    local uic = Instance.new("UICorner", window)
-    uic.CornerRadius = UDim.new(0, 8)
+    Instance.new("UICorner", window).CornerRadius = UDim.new(0, 8)
     
-    local title = Instance.new("TextLabel", window)
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
     title.Size = UDim2.new(1, 0, 0, 50)
     title.BackgroundTransparency = 1
     title.Text = "Aetherial Hub - Authentication"
     title.TextColor3 = Color3.fromRGB(200, 200, 255)
     title.Font = Enum.Font.GothamBold
     title.TextSize = 18
+    title.Parent = window
     
-    local input = Instance.new("TextBox", window)
+    local input = Instance.new("TextBox")
+    input.Name = "KeyInput"
     input.Size = UDim2.new(0, 300, 0, 40)
-    input.Position = UDim2.new(0.5, -150, 0.5, -20)
+    input.Position = UDim2.new(0.5, -150, 0.5, -30)
     input.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
     input.TextColor3 = Color3.fromRGB(255, 255, 255)
     input.Font = Enum.Font.Gotham
     input.TextSize = 14
     input.PlaceholderText = "Enter your key..."
     input.Text = ""
+    input.ClearTextOnFocus = false
     Instance.new("UICorner", input).CornerRadius = UDim.new(0, 6)
+    input.Parent = window
     
-    local submit = Instance.new("TextButton", window)
+    local submit = Instance.new("TextButton")
+    submit.Name = "Submit"
     submit.Size = UDim2.new(0, 140, 0, 35)
-    submit.Position = UDim2.new(0.5, -70, 0.8, -17)
+    submit.Position = UDim2.new(0.5, -70, 0.65, 0)
     submit.BackgroundColor3 = Color3.fromRGB(80, 100, 255)
     submit.TextColor3 = Color3.fromRGB(255, 255, 255)
     submit.Font = Enum.Font.GothamBold
     submit.TextSize = 14
     submit.Text = "Check Key"
     Instance.new("UICorner", submit).CornerRadius = UDim.new(0, 6)
+    submit.Parent = window
     
-    local status = Instance.new("TextLabel", window)
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Name = "Close"
+    closeBtn.Size = UDim2.new(0, 30, 0, 30)
+    closeBtn.Position = UDim2.new(1, -35, 0, 5)
+    closeBtn.BackgroundTransparency = 1
+    closeBtn.Text = "×"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 100, 100)
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.TextSize = 20
+    closeBtn.Parent = window
+    
+    local status = Instance.new("TextLabel")
+    status.Name = "Status"
     status.Size = UDim2.new(1, 0, 0, 20)
-    status.Position = UDim2.new(0, 0, 1, 5)
+    status.Position = UDim2.new(0, 0, 0.85, 0)
     status.BackgroundTransparency = 1
     status.TextColor3 = Color3.fromRGB(255, 100, 100)
     status.Font = Enum.Font.Gotham
     status.TextSize = 12
     status.Text = ""
-
-    local success = false
+    status.Parent = window
+    
     submit.MouseButton1Click:Connect(function()
         local key = input.Text
-        if key == "" then status.Text = "Please enter a key" return end
+        if key == "" then 
+            status.Text = "Please enter a key" 
+            return 
+        end
+        
         status.TextColor3 = Color3.fromRGB(200, 200, 200)
         status.Text = "Checking key..."
+        submit.Active = false
         
-        local httpRequest = (request or http and http.request or http_request)
+        local httpRequest = (request or http_request or (http and http.request))
         if not httpRequest then
             status.Text = "Executor does not support HTTP requests!"
+            submit.Active = true
             return
         end
         
-        pcall(function()
-            local hwid = gethwid and gethwid() or "unknown-hwid"
-            local res = httpRequest({
-                Url = API_URL .. "?key=" .. key .. "&hwid=" .. hwid,
-                Method = "GET"
-            })
-            
-            if res.StatusCode == 200 then
-                local data = HttpService:JSONDecode(res.Body)
-                if data.valid then
-                    status.TextColor3 = Color3.fromRGB(100, 255, 100)
-                    status.Text = "Authenticated! Loading..."
-                    task.wait(1)
-                    sg:Destroy()
-                    success = true
+        task.spawn(function()
+            local success, err = pcall(function()
+                local hwid = (typeof(gethwid) == "function" and gethwid()) or (game:GetService("RbxAnalyticsService"):GetClientId()) or "unknown-hwid"
+                local res = httpRequest({
+                    Url = API_URL .. "?key=" .. HttpService:UrlEncode(key) .. "&hwid=" .. HttpService:UrlEncode(hwid),
+                    Method = "GET"
+                })
+                
+                if res.StatusCode == 200 then
+                    local data = HttpService:JSONDecode(res.Body)
+                    if data and data.valid then
+                        status.TextColor3 = Color3.fromRGB(100, 255, 100)
+                        status.Text = "Authenticated! Loading..."
+                        task.wait(1)
+                        authSuccess = true
+                        sg:Destroy()
+                    else
+                        status.TextColor3 = Color3.fromRGB(255, 100, 100)
+                        status.Text = "Invalid or expired key."
+                        submit.Active = true
+                    end
                 else
                     status.TextColor3 = Color3.fromRGB(255, 100, 100)
-                    status.Text = "Invalid or expired key."
+                    status.Text = "Server error. Code: " .. tostring(res.StatusCode)
+                    submit.Active = true
                 end
-            else
+            end)
+            
+            if not success then
                 status.TextColor3 = Color3.fromRGB(255, 100, 100)
-                status.Text = "Error connecting to server. Code: " .. tostring(res.StatusCode)
+                status.Text = "Request failed: " .. tostring(err):sub(1, 50)
+                submit.Active = true
             end
         end)
     end)
     
-    repeat task.wait(0.1) until success
+    closeBtn.MouseButton1Click:Connect(function()
+        authSuccess = true
+        sg:Destroy()
+    end)
+    
+    -- Safely wait without infinite yielding
+    local startTime = tick()
+    while not authSuccess do
+        if tick() - startTime > 120 then -- 2 minute timeout
+            sg:Destroy()
+            break
+        end
+        task.wait(0.1)
+    end
 end
 
 ShowLoadingScreen()
 
-local LocalPlayer = Players.LocalPlayer
-local Camera = Workspace.CurrentCamera
+-- ==========================================
+-- UI LIBRARY LOADING (with error handling)
+-- ==========================================
+local Library, ThemeManager, SaveManager
+local Options, Toggles
 
--- Weapon stats loading
-local WeaponStatsModule = ReplicatedStorage:WaitForChild("WeaponStats", 5)
-local WeaponStats = WeaponStatsModule and require(WeaponStatsModule) or {}
+local libSuccess, libErr = pcall(function()
+    local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+    Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
+    ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+    SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+end)
 
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
-local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
-local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
-local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+if not libSuccess or not Library then
+    warn("Failed to load Obsidian UI Library: " .. tostring(libErr))
+    return -- Cannot continue without UI
+end
 
-local Options = Library.Options
-local Toggles = Library.Toggles
+Options = Library.Options
+Toggles = Library.Toggles
 
 Library.ForceCheckbox = false 
 Library.ShowToggleFrameInKeybinds = true 
 
 local Window = Library:CreateWindow({
-	Title = "Aetherial",
-	Footer = "version: beta | discord.gg/aetherial",
-	Icon = 95953584838667,
-	NotifySide = "Right",
-	ShowCustomCursor = true,
+    Title = "Aetherial",
+    Footer = "version: beta | discord.gg/aetherial",
+    Icon = 95953584838667,
+    NotifySide = "Right",
+    ShowCustomCursor = true,
 })
 
 local Tabs = {
-	Combat = Window:AddTab("Combat", "swords"),
-	Visuals = Window:AddTab("Visuals", "eye"),
-	Movement = Window:AddTab("Movement", "person-standing"),
-	["UI Settings"] = Window:AddTab("UI Settings", "settings"),
+    Combat = Window:AddTab("Combat", "swords"),
+    Visuals = Window:AddTab("Visuals", "eye"),
+    Movement = Window:AddTab("Movement", "person-standing"),
+    ["UI Settings"] = Window:AddTab("UI Settings", "settings"),
 }
 
 -- ==========================================
@@ -148,8 +231,12 @@ local Tabs = {
 -- ==========================================
 local function IsVisible(targetPart)
     if not targetPart then return false end
-    local castPoints = {targetPart.Position}
+    local targetChar = targetPart:FindFirstAncestorOfClass("Model")
     local ignoreList = {LocalPlayer.Character, Camera}
+    if targetChar then
+        table.insert(ignoreList, targetChar)
+    end
+    local castPoints = {targetPart.Position}
     local parts = Camera:GetPartsObscuringTarget(castPoints, ignoreList)
     return #parts == 0
 end
@@ -173,7 +260,8 @@ local function GetClosestTarget(targetPartName, fovRadius, teamCheck, visCheck, 
         if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(targetPartName) then
             if teamCheck and player.Team == LocalPlayer.Team then continue end
             if excludeFriends and player:IsFriendsWith(LocalPlayer.UserId) then continue end
-            if player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health <= 0 then continue end
+            local humanoid = player.Character:FindFirstChild("Humanoid")
+            if humanoid and humanoid.Health <= 0 then continue end
             
             local targetPart = player.Character[targetPartName]
             local pos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
@@ -193,8 +281,11 @@ local function GetClosestTarget(targetPartName, fovRadius, teamCheck, visCheck, 
 end
 
 -- ==========================================
--- GUN MODS LOGIC
+-- WEAPON STATS & GUN MODS
 -- ==========================================
+local WeaponStatsModule = ReplicatedStorage:WaitForChild("WeaponStats", 5)
+local WeaponStats = WeaponStatsModule and require(WeaponStatsModule) or {}
+
 local OriginalWeaponStats = {}
 if WeaponStats then
     for name, stats in pairs(WeaponStats) do
@@ -267,7 +358,7 @@ local function ApplyGunMods()
             end
             if Toggles.MaxBulletSpeed and Toggles.MaxBulletSpeed.Value then
                 if stats.ProjectileParams then stats.ProjectileParams.Velocity = 999999 end
-                stats.ProjectileSpeed = 999999
+                stats.BulletSpeed = 999999
             end
             if Toggles.NoSway and Toggles.NoSway.Value then
                 stats.SwayAmp = 0
@@ -294,6 +385,7 @@ GunModsGroup:AddToggle("ZeroSpread", { Text = "No Spread", Default = false, Call
 GunModsGroup:AddToggle("BottomlessClip", { Text = "Infinite Ammo", Default = false, Callback = OnGunModToggle })
 GunModsGroup:AddToggle("InstantReload", { Text = "Instant Reload", Default = false, Callback = OnGunModToggle })
 GunModsGroup:AddToggle("FastFireRate", { Text = "Fast Fire Rate", Default = false, Callback = OnGunModToggle })
+GunModsGroup:AddToggle("FullAutoEveryGun", { Text = "Full Auto Every Gun", Default = false, Callback = OnGunModToggle })
 GunModsGroup:AddToggle("InstantKill", { Text = "Instant Kill (One Shot)", Default = false, Callback = OnGunModToggle })
 GunModsGroup:AddToggle("NoBulletDrop", { Text = "No Bullet Drop", Default = false, Callback = OnGunModToggle })
 GunModsGroup:AddToggle("MaxRange", { Text = "Max Range", Default = false, Callback = OnGunModToggle })
@@ -306,13 +398,22 @@ GunModsGroup:AddButton("Force Apply Mods", function()
     Library:Notify({Title = "Gun Mods", Description = "Mods force-applied to all weapons.", Time = 3})
 end)
 
+-- Re-apply mods periodically in case new weapons are equipped
+AddConnection(RunService.Heartbeat:Connect(function()
+    if Toggles.AntiRecoil and Toggles.AntiRecoil.Value then
+        ApplyGunMods()
+    end
+end))
+
 -- ==========================================
--- SILENT AIM LOGIC
+-- SILENT AIM
 -- ==========================================
 local SilentAimGroup = Tabs.Combat:AddRightGroupbox("Silent Aim")
 
 local PlayerList = {"None"}
-for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then table.insert(PlayerList, p.Name) end end
+for _, p in pairs(Players:GetPlayers()) do 
+    if p ~= LocalPlayer then table.insert(PlayerList, p.Name) end 
+end
 
 SilentAimGroup:AddToggle("SilentAim", { Text = "Enable Silent Aim", Default = false })
 SilentAimGroup:AddDropdown("SilentAimTargetPlayer", { Values = PlayerList, Default = 1, Multi = false, Text = "Target Player" })
@@ -332,7 +433,7 @@ FOVCircle.Filled = false
 FOVCircle.Thickness = 1
 
 -- ==========================================
--- AIMBOT LOGIC
+-- AIMBOT
 -- ==========================================
 local AimbotGroup = Tabs.Combat:AddRightGroupbox("Aimbot")
 AimbotGroup:AddToggle("Aimbot", { Text = "Enable Aimbot", Default = false })
@@ -371,16 +472,16 @@ CombatMiscGroup:AddToggle("HitSound", { Text = "Enable Hit Sound", Default = fal
 CombatMiscGroup:AddDropdown("HitSoundType", { Values = {"Rust", "Bells", "Skeet", "Neverlose", "Dog", "RustHeadshot", "Ding"}, Default = 1, Multi = false, Text = "Sound" })
 
 -- Hitsound Logic
-local PlayHitSound = function()
+local function PlayHitSound()
     local sound = Instance.new("Sound")
-    local type = Options.HitSoundType.Value
-    if type == "Rust" then sound.SoundId = "rbxassetid://160432334"
-    elseif type == "Bells" then sound.SoundId = "rbxassetid://12066699318"
-    elseif type == "Skeet" then sound.SoundId = "rbxassetid://5641855627"
-    elseif type == "Neverlose" then sound.SoundId = "rbxassetid://6534224075"
-    elseif type == "Dog" then sound.SoundId = "rbxassetid://5902468562"
-    elseif type == "RustHeadshot" then sound.SoundId = "rbxassetid://138750331387064"
-    elseif type == "Ding" then sound.SoundId = "rbxassetid://78096406204798" end
+    local soundType = Options.HitSoundType and Options.HitSoundType.Value or "Rust"
+    if soundType == "Rust" then sound.SoundId = "rbxassetid://160432334"
+    elseif soundType == "Bells" then sound.SoundId = "rbxassetid://12066699318"
+    elseif soundType == "Skeet" then sound.SoundId = "rbxassetid://5641855627"
+    elseif soundType == "Neverlose" then sound.SoundId = "rbxassetid://6534224075"
+    elseif soundType == "Dog" then sound.SoundId = "rbxassetid://5902468562"
+    elseif soundType == "RustHeadshot" then sound.SoundId = "rbxassetid://138750331387064"
+    elseif soundType == "Ding" then sound.SoundId = "rbxassetid://78096406204798" end
     sound.Parent = Workspace
     sound.Volume = 2
     sound:Play()
@@ -395,14 +496,18 @@ local function UpdatePlayerLists()
     for _, p in pairs(Players:GetPlayers()) do
         if p ~= LocalPlayer then table.insert(list, p.Name) end
     end
-    if Options.SilentAimTargetPlayer then Options.SilentAimTargetPlayer:SetValues(list) end
-    if Options.AimbotTargetPlayer then Options.AimbotTargetPlayer:SetValues(list) end
+    if Options.SilentAimTargetPlayer and typeof(Options.SilentAimTargetPlayer.SetValues) == "function" then 
+        Options.SilentAimTargetPlayer:SetValues(list) 
+    end
+    if Options.AimbotTargetPlayer and typeof(Options.AimbotTargetPlayer.SetValues) == "function" then 
+        Options.AimbotTargetPlayer:SetValues(list) 
+    end
 end
-Players.PlayerAdded:Connect(UpdatePlayerLists)
-Players.PlayerRemoving:Connect(UpdatePlayerLists)
 
-RunService.RenderStepped:Connect(function()
-    -- UI Visuals
+AddConnection(Players.PlayerAdded:Connect(UpdatePlayerLists))
+AddConnection(Players.PlayerRemoving:Connect(UpdatePlayerLists))
+
+AddConnection(RunService.RenderStepped:Connect(function()
     local midScreen = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
     
     if FOVCircle then
@@ -420,23 +525,35 @@ RunService.RenderStepped:Connect(function()
     end
 
     -- Camera Aimbot Logic
-    if Toggles.Aimbot and Toggles.Aimbot.Value and Options.AimbotKey:GetState() then
-        local targetPartName = Options.AimbotPart and Options.AimbotPart.Value or "Head"
-        local fov = Options.AimbotFOV and Options.AimbotFOV.Value or 100
-        local teamCheck = Toggles.AimbotTeamCheck and Toggles.AimbotTeamCheck.Value
-        local visCheck = Toggles.AimbotVisCheck and Toggles.AimbotVisCheck.Value
-        local wallBang = Toggles.AimbotWallbang and Toggles.AimbotWallbang.Value
-        local excludeFriends = Toggles.AimbotExcludeFriends and Toggles.AimbotExcludeFriends.Value
-        local forceTargetPlayer = Options.AimbotTargetPlayer and Options.AimbotTargetPlayer.Value
+    if Toggles.Aimbot and Toggles.Aimbot.Value then
+        local keyPicker = Options.AimbotKey
+        local isHolding = false
+        if keyPicker then
+            if typeof(keyPicker.GetState) == "function" then
+                isHolding = keyPicker:GetState()
+            elseif keyPicker.Active ~= nil then
+                isHolding = keyPicker.Active
+            end
+        end
         
-        local target = GetClosestTarget(targetPartName, fov, teamCheck, visCheck, wallBang, excludeFriends, forceTargetPlayer)
-        if target and target:FindFirstChild(targetPartName) then
-            local pos = target[targetPartName].Position
-            local smooth = Options.AimbotSmoothness and Options.AimbotSmoothness.Value or 1
-            if smooth <= 1.1 then
-                Camera.CFrame = CFrame.new(Camera.CFrame.Position, pos)
-            else
-                Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, pos), 1 / smooth)
+        if isHolding then
+            local targetPartName = Options.AimbotPart and Options.AimbotPart.Value or "Head"
+            local fov = Options.AimbotFOV and Options.AimbotFOV.Value or 100
+            local teamCheck = Toggles.AimbotTeamCheck and Toggles.AimbotTeamCheck.Value
+            local visCheck = Toggles.AimbotVisCheck and Toggles.AimbotVisCheck.Value
+            local wallBang = Toggles.AimbotWallbang and Toggles.AimbotWallbang.Value
+            local excludeFriends = Toggles.AimbotExcludeFriends and Toggles.AimbotExcludeFriends.Value
+            local forceTargetPlayer = Options.AimbotTargetPlayer and Options.AimbotTargetPlayer.Value
+            
+            local target = GetClosestTarget(targetPartName, fov, teamCheck, visCheck, wallBang, excludeFriends, forceTargetPlayer)
+            if target and target:FindFirstChild(targetPartName) then
+                local pos = target[targetPartName].Position
+                local smooth = Options.AimbotSmoothness and Options.AimbotSmoothness.Value or 1
+                if smooth <= 1.1 then
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, pos)
+                else
+                    Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, pos), 1 / smooth)
+                end
             end
         end
     end
@@ -451,12 +568,12 @@ RunService.RenderStepped:Connect(function()
         local excludeFriends = Toggles.SilentAimExcludeFriends and Toggles.SilentAimExcludeFriends.Value
         
         local target = GetClosestTarget(targetPartName, fov, teamCheck, visCheck, wallBang, excludeFriends, "None")
-        if target then
-            if mouse1click then mouse1click() end
+        if target and typeof(mouse1click) == "function" then
+            mouse1click()
         end
     end
     
-    -- Hitbox Expander Output
+    -- Hitbox Expander (Fixed respawn handling)
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
             if Toggles.HitboxExcludeFriends and Toggles.HitboxExcludeFriends.Value and player:IsFriendsWith(LocalPlayer.UserId) then continue end
@@ -464,45 +581,61 @@ RunService.RenderStepped:Connect(function()
             local partName = Options.HitboxPart and Options.HitboxPart.Value or "Head"
             local part = player.Character:FindFirstChild(partName)
             if part and part:IsA("BasePart") then
-                if not OriginalHitboxSizes[player.Name] then OriginalHitboxSizes[player.Name] = {} end
-                if not OriginalHitboxSizes[player.Name][partName] then
-                    OriginalHitboxSizes[player.Name][partName] = {Size = part.Size, Trans = part.Transparency}
+                local charId = player.Character
+                if not OriginalHitboxSizes[charId] then OriginalHitboxSizes[charId] = {} end
+                if not OriginalHitboxSizes[charId][partName] then
+                    OriginalHitboxSizes[charId][partName] = {Size = part.Size, Trans = part.Transparency, Material = part.Material}
                 end
                 
                 if Toggles.HitboxEnabled and Toggles.HitboxEnabled.Value then
-                    local size = Options.HitboxSize.Value
+                    local size = Options.HitboxSize and Options.HitboxSize.Value or 2
                     part.Size = Vector3.new(size, size, size)
-                    part.Transparency = Options.HitboxTrans.Value
+                    part.Transparency = Options.HitboxTrans and Options.HitboxTrans.Value or 0.5
                     part.CanCollide = false
+                    part.Material = Enum.Material.Neon
                 else
-                    -- Reset to original
-                    local og = OriginalHitboxSizes[player.Name][partName]
+                    local og = OriginalHitboxSizes[charId][partName]
                     if og then
                         part.Size = og.Size
                         part.Transparency = og.Trans
+                        part.Material = og.Material
                     end
                 end
             end
         end
     end
-end)
+end))
 
--- Health monitor for hitsounds
-RunService.Heartbeat:Connect(function()
+-- Health monitor for hitsounds (Note: Cannot accurately detect local hits without remote hooks)
+AddConnection(RunService.Heartbeat:Connect(function()
     if Toggles.HitSound and Toggles.HitSound.Value then
         for _, player in pairs(Players:GetPlayers()) do
             if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild("Humanoid") then
-                local currentHealth = player.Character.Humanoid.Health
+                local humanoid = player.Character.Humanoid
+                local currentHealth = humanoid.Health
                 if EnemyHealths[player] and currentHealth < EnemyHealths[player] and currentHealth > 0 then
-                    -- Very basic check if LocalPlayer's weapon caused it? Tricky without hooks. Assumes hit.
                     PlayHitSound() 
                 end
                 EnemyHealths[player] = currentHealth
             end
         end
     end
-end)
-Players.PlayerRemoving:Connect(function(player) EnemyHealths[player] = nil end)
+end))
+
+AddConnection(Players.PlayerRemoving:Connect(function(player) 
+    EnemyHealths[player] = nil 
+end))
+
+AddConnection(Players.PlayerAdded:Connect(function(player)
+    EnemyHealths[player] = nil
+end))
+
+-- Cleanup hitbox data on character removal
+AddConnection(Players.PlayerRemoving:Connect(function(player)
+    if player.Character and OriginalHitboxSizes[player.Character] then
+        OriginalHitboxSizes[player.Character] = nil
+    end
+end))
 
 -- Create Beam for Trails
 local function CreateBulletTrail(startPos, endPos)
@@ -531,22 +664,24 @@ local function CreateBulletTrail(startPos, endPos)
     
     game.Debris:AddItem(part, 1)
     
-    coroutine.wrap(function()
+    task.spawn(function()
         for i = 1, 0, -0.05 do
-            beam.Transparency = NumberSequence.new(1 - i)
+            if beam and beam.Parent then
+                beam.Transparency = NumberSequence.new(1 - i)
+            end
             task.wait(0.01)
         end
-    end)()
+    end)
 end
 
--- Remote Hook for Silent Aim
-local OldNameCall = nil
+-- Remote Hook for Silent Aim (Fixed argument packing)
+local OldNameCall
 OldNameCall = hookmetamethod(game, "__namecall", function(self, ...)
     local method = getnamecallmethod()
-    local args = {...}
+    local args = table.pack(...)
     
     if Toggles.SilentAim and Toggles.SilentAim.Value and method == "FireServer" and tostring(self) == "CastProjectileRequest" then
-        if math.random(1, 100) <= Options.SilentAimHitChance.Value then
+        if math.random(1, 100) <= (Options.SilentAimHitChance and Options.SilentAimHitChance.Value or 100) then
             local targetPartName = Options.SilentAimPart and Options.SilentAimPart.Value or "Head"
             local fov = Options.SilentAimFOV and Options.SilentAimFOV.Value or 200
             local teamCheck = Toggles.SilentAimTeamCheck and Toggles.SilentAimTeamCheck.Value
@@ -565,7 +700,7 @@ OldNameCall = hookmetamethod(game, "__namecall", function(self, ...)
                 if type(projData) == "table" then
                     if #projData > 0 then
                         for i, bullet in pairs(projData) do
-                            if bullet.StartCF and bullet.Caster then
+                            if bullet and type(bullet) == "table" and bullet.StartCF and bullet.Caster then
                                 if Toggles.BulletTrails and Toggles.BulletTrails.Value then
                                     CreateBulletTrail(bullet.StartCF.Position, targetPos)
                                 end
@@ -589,10 +724,9 @@ OldNameCall = hookmetamethod(game, "__namecall", function(self, ...)
                 end
             end
         end
-        if setnamecallmethod then setnamecallmethod(method) end
-        return OldNameCall(self, unpack(args))
+        return OldNameCall(self, table.unpack(args, 1, args.n))
     end
-    return OldNameCall(self, unpack(args))
+    return OldNameCall(self, table.unpack(args, 1, args.n))
 end)
 
 -- ==========================================
@@ -614,8 +748,13 @@ ESPGroup:AddLabel("ESP Color"):AddColorPicker("ESPColor", { Default = Color3.fro
 
 local ESPObjects = {}
 local ChamsHighlights = {}
+local ChamsFolder = Instance.new("Folder")
+ChamsFolder.Name = "AetherialChams"
+ChamsFolder.Parent = CoreGui
 
 local function CreateESP(player)
+    if ESPObjects[player] then return end
+    
     local esp = {
         BoxOutline = Drawing.new("Square"),
         Box = Drawing.new("Square"),
@@ -661,17 +800,19 @@ local function CreateESP(player)
     
     ESPObjects[player] = esp
 
-    -- Highlight logic
     local highlight = Instance.new("Highlight")
     highlight.FillTransparency = 0.5
     highlight.OutlineTransparency = 0.1
+    highlight.Parent = ChamsFolder
     ChamsHighlights[player] = highlight
 end
 
 local function RemoveESP(player)
     if ESPObjects[player] then
         for _, drawing in pairs(ESPObjects[player]) do
-            drawing:Remove()
+            if drawing and typeof(drawing.Remove) == "function" then
+                drawing:Remove()
+            end
         end
         ESPObjects[player] = nil
     end
@@ -684,133 +825,149 @@ end
 for _, player in pairs(Players:GetPlayers()) do
     if player ~= LocalPlayer then CreateESP(player) end
 end
-Players.PlayerAdded:Connect(function(player)
+
+AddConnection(Players.PlayerAdded:Connect(function(player)
     if player ~= LocalPlayer then CreateESP(player) end
-end)
-Players.PlayerRemoving:Connect(function(player)
+end))
+
+AddConnection(Players.PlayerRemoving:Connect(function(player)
     RemoveESP(player)
-end)
+end))
 
-RunService.RenderStepped:Connect(function()
+AddConnection(RunService.RenderStepped:Connect(function()
     for player, esp in pairs(ESPObjects) do
-        local isEnabled = Toggles.ESPEnabled and Toggles.ESPEnabled.Value
-        local char = player.Character
-        local isAlive = char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0
-        local passTeam = not (Toggles.ESPTeamCheck and Toggles.ESPTeamCheck.Value and player.Team == LocalPlayer.Team)
-        
-        local highlight = ChamsHighlights[player]
-
-        if isEnabled and isAlive and passTeam then
-            local hrp = char.HumanoidRootPart
-            local head = char:FindFirstChild("Head") or hrp
+        local success, err = pcall(function()
+            local isEnabled = Toggles.ESPEnabled and Toggles.ESPEnabled.Value
+            local char = player.Character
+            local humanoid = char and char:FindFirstChild("Humanoid")
+            local isAlive = char and char:FindFirstChild("HumanoidRootPart") and humanoid and humanoid.Health > 0
+            local passTeam = not (Toggles.ESPTeamCheck and Toggles.ESPTeamCheck.Value and player.Team == LocalPlayer.Team)
             
-            local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
-            local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
-            local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
-            
-            local color = Options.ESPColor and Options.ESPColor.Value or Color3.new(1,1,1)
+            local highlight = ChamsHighlights[player]
 
-            -- Chams
-            if highlight then
-                if Toggles.ESPChams and Toggles.ESPChams.Value then
-                    highlight.Parent = CoreGui 
-                    highlight.Adornee = char
-                    highlight.FillColor = color
-                    highlight.OutlineColor = color
-                    highlight.DepthMode = (Toggles.ESPChamsVisCheck and Toggles.ESPChamsVisCheck.Value) and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
-                    highlight.Enabled = true
-                else
-                    highlight.Enabled = false
-                end
-            end
+            if isEnabled and isAlive and passTeam then
+                local hrp = char.HumanoidRootPart
+                local head = char:FindFirstChild("Head") or hrp
+                
+                local pos, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+                local headPos = Camera:WorldToViewportPoint(head.Position + Vector3.new(0, 0.5, 0))
+                local legPos = Camera:WorldToViewportPoint(hrp.Position - Vector3.new(0, 3, 0))
+                
+                local color = Options.ESPColor and Options.ESPColor.Value or Color3.new(1,1,1)
 
-            if onScreen then
-                local height = math.abs(headPos.Y - legPos.Y)
-                local width = height * 0.6
-                
-                if Toggles.ESPBoxes and Toggles.ESPBoxes.Value then
-                    esp.BoxOutline.Size = Vector2.new(width, height)
-                    esp.BoxOutline.Position = Vector2.new(pos.X - width / 2, pos.Y - height / 2)
-                    esp.BoxOutline.Visible = true
-                    
-                    esp.Box.Size = Vector2.new(width, height)
-                    esp.Box.Position = Vector2.new(pos.X - width / 2, pos.Y - height / 2)
-                    esp.Box.Color = color
-                    esp.Box.Visible = true
-                else
-                    esp.BoxOutline.Visible = false
-                    esp.Box.Visible = false
-                end
-                
-                if Toggles.ESPNames and Toggles.ESPNames.Value then
-                    esp.Name.Text = player.Name
-                    esp.Name.Position = Vector2.new(pos.X, pos.Y - height / 2 - 18)
-                    esp.Name.Color = color
-                    esp.Name.Visible = true
-                else
-                    esp.Name.Visible = false
-                end
-                
-                if Toggles.ESPDist and Toggles.ESPDist.Value then
-                    local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
-                    esp.Distance.Text = string.format("[%d m]", math.floor(dist))
-                    esp.Distance.Position = Vector2.new(pos.X, pos.Y + height / 2 + 2)
-                    esp.Distance.Color = color
-                    esp.Distance.Visible = true
-                else
-                    esp.Distance.Visible = false
+                -- Chams
+                if highlight then
+                    if Toggles.ESPChams and Toggles.ESPChams.Value then
+                        highlight.Adornee = char
+                        highlight.FillColor = color
+                        highlight.OutlineColor = color
+                        highlight.DepthMode = (Toggles.ESPChamsVisCheck and Toggles.ESPChamsVisCheck.Value) and Enum.HighlightDepthMode.Occluded or Enum.HighlightDepthMode.AlwaysOnTop
+                        highlight.Enabled = true
+                    else
+                        highlight.Enabled = false
+                        highlight.Adornee = nil
+                    end
                 end
 
-                if Toggles.ESPWeapon and Toggles.ESPWeapon.Value then
-                    local tool = char:FindFirstChildOfClass("Tool")
-                    esp.Weapon.Text = tool and tool.Name or "None"
-                    local yAdd = Toggles.ESPDist and Toggles.ESPDist.Value and 16 or 0
-                    esp.Weapon.Position = Vector2.new(pos.X, pos.Y + height / 2 + 2 + yAdd)
-                    esp.Weapon.Visible = true
-                else
-                    esp.Weapon.Visible = false
-                end
+                if onScreen then
+                    local height = math.abs(headPos.Y - legPos.Y)
+                    local width = height * 0.6
+                    
+                    if Toggles.ESPBoxes and Toggles.ESPBoxes.Value then
+                        esp.BoxOutline.Size = Vector2.new(width, height)
+                        esp.BoxOutline.Position = Vector2.new(pos.X - width / 2, pos.Y - height / 2)
+                        esp.BoxOutline.Visible = true
+                        
+                        esp.Box.Size = Vector2.new(width, height)
+                        esp.Box.Position = Vector2.new(pos.X - width / 2, pos.Y - height / 2)
+                        esp.Box.Color = color
+                        esp.Box.Visible = true
+                    else
+                        esp.BoxOutline.Visible = false
+                        esp.Box.Visible = false
+                    end
+                    
+                    if Toggles.ESPNames and Toggles.ESPNames.Value then
+                        esp.Name.Text = player.Name
+                        esp.Name.Position = Vector2.new(pos.X, pos.Y - height / 2 - 18)
+                        esp.Name.Color = color
+                        esp.Name.Visible = true
+                    else
+                        esp.Name.Visible = false
+                    end
+                    
+                    if Toggles.ESPDist and Toggles.ESPDist.Value then
+                        local dist = (Camera.CFrame.Position - hrp.Position).Magnitude
+                        esp.Distance.Text = string.format("[%d m]", math.floor(dist))
+                        esp.Distance.Position = Vector2.new(pos.X, pos.Y + height / 2 + 2)
+                        esp.Distance.Color = color
+                        esp.Distance.Visible = true
+                    else
+                        esp.Distance.Visible = false
+                    end
 
-                if Toggles.ESPSnaplines and Toggles.ESPSnaplines.Value then
-                    esp.Snapline.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-                    esp.Snapline.To = Vector2.new(pos.X, pos.Y + height / 2)
-                    esp.Snapline.Color = color
-                    esp.Snapline.Visible = true
+                    if Toggles.ESPWeapon and Toggles.ESPWeapon.Value then
+                        local tool = char:FindFirstChildOfClass("Tool")
+                        esp.Weapon.Text = tool and tool.Name or "None"
+                        local yAdd = Toggles.ESPDist and Toggles.ESPDist.Value and 16 or 0
+                        esp.Weapon.Position = Vector2.new(pos.X, pos.Y + height / 2 + 2 + yAdd)
+                        esp.Weapon.Visible = true
+                    else
+                        esp.Weapon.Visible = false
+                    end
+
+                    if Toggles.ESPSnaplines and Toggles.ESPSnaplines.Value then
+                        esp.Snapline.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+                        esp.Snapline.To = Vector2.new(pos.X, pos.Y + height / 2)
+                        esp.Snapline.Color = color
+                        esp.Snapline.Visible = true
+                    else
+                        esp.Snapline.Visible = false
+                    end
+                    
+                    if Toggles.ESPHealth and Toggles.ESPHealth.Value then
+                        local health = humanoid.Health
+                        local maxHealth = humanoid.MaxHealth
+                        if maxHealth == 0 then maxHealth = 100 end
+                        local factor = math.clamp(health / maxHealth, 0, 1)
+                        
+                        local barHeight = height
+                        local bottomY = pos.Y + height / 2
+                        local leftX = pos.X - width / 2 - 5
+                        
+                        esp.HealthOutline.From = Vector2.new(leftX, bottomY + 1)
+                        esp.HealthOutline.To = Vector2.new(leftX, bottomY - barHeight - 1)
+                        esp.HealthOutline.Visible = true
+                        
+                        esp.Health.From = Vector2.new(leftX, bottomY)
+                        esp.Health.To = Vector2.new(leftX, bottomY - (barHeight * factor))
+                        esp.Health.Color = Color3.fromHSV(factor * 0.3, 1, 1)
+                        esp.Health.Visible = true
+                    else
+                        esp.HealthOutline.Visible = false
+                        esp.Health.Visible = false
+                    end
                 else
-                    esp.Snapline.Visible = false
-                end
-                
-                if Toggles.ESPHealth and Toggles.ESPHealth.Value then
-                    local health = char.Humanoid.Health
-                    local maxHealth = char.Humanoid.MaxHealth
-                    if maxHealth == 0 then maxHealth = 100 end
-                    local factor = math.clamp(health / maxHealth, 0, 1)
-                    
-                    local barHeight = height
-                    local bottomY = pos.Y + height / 2
-                    local leftX = pos.X - width / 2 - 5
-                    
-                    esp.HealthOutline.From = Vector2.new(leftX, bottomY + 1)
-                    esp.HealthOutline.To = Vector2.new(leftX, bottomY - barHeight - 1)
-                    esp.HealthOutline.Visible = true
-                    
-                    esp.Health.From = Vector2.new(leftX, bottomY)
-                    esp.Health.To = Vector2.new(leftX, bottomY - (barHeight * factor))
-                    esp.Health.Color = Color3.fromHSV(factor * 0.3, 1, 1)
-                    esp.Health.Visible = true
-                else
-                    esp.HealthOutline.Visible = false
-                    esp.Health.Visible = false
+                    for k, drawing in pairs(esp) do 
+                        if typeof(drawing.Visible) ~= "nil" then drawing.Visible = false end 
+                    end
                 end
             else
-                for k, drawing in pairs(esp) do drawing.Visible = false end
+                for k, drawing in pairs(esp) do 
+                    if typeof(drawing.Visible) ~= "nil" then drawing.Visible = false end 
+                end
+                if highlight then 
+                    highlight.Enabled = false 
+                    highlight.Adornee = nil
+                end
             end
-        else
-            for k, drawing in pairs(esp) do drawing.Visible = false end
-            if highlight then highlight.Enabled = false end
+        end)
+        
+        if not success then
+            -- Silently handle ESP errors for individual players
         end
     end
-end)
+end))
 
 -- ==========================================
 -- MOVEMENT / PLAYER LOGIC
@@ -824,27 +981,35 @@ PlayerModGroup:AddSlider("SpeedhackWalkSpeed", { Text = "WalkSpeed", Default = 5
 
 local FakeForceField = nil
 
-RunService.RenderStepped:Connect(function()
+AddConnection(RunService.RenderStepped:Connect(function()
     local char = LocalPlayer.Character
     if not char then return end
 
     if Toggles.InfiniteSprint and Toggles.InfiniteSprint.Value then
         local st = char:FindFirstChild("Stamina") or LocalPlayer:FindFirstChild("Stamina")
         if st and st:IsA("NumberValue") then st.Value = 100 end
+        -- Also check attributes
+        if char:GetAttribute("Stamina") then
+            char:SetAttribute("Stamina", 100)
+        end
+        if LocalPlayer:GetAttribute("Stamina") then
+            LocalPlayer:SetAttribute("Stamina", 100)
+        end
     end
 
     if Toggles.Speedhack and Toggles.Speedhack.Value then
-        if char:FindFirstChild("Humanoid") then
-            char.Humanoid.WalkSpeed = Options.SpeedhackWalkSpeed.Value
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.WalkSpeed = Options.SpeedhackWalkSpeed.Value
         end
     end
 
     if Toggles.CharacterForcefield and Toggles.CharacterForcefield.Value then
-        if not FakeForceField then
+        if not FakeForceField or FakeForceField.Parent == nil then
             FakeForceField = Instance.new("ForceField")
             FakeForceField.Visible = true
-            FakeForceField.Parent = char
-        elseif FakeForceField.Parent ~= char then
+        end
+        if FakeForceField.Parent ~= char then
             FakeForceField.Parent = char
         end
     else
@@ -853,7 +1018,7 @@ RunService.RenderStepped:Connect(function()
             FakeForceField = nil
         end
     end
-end)
+end))
 
 local GhostFlyGroup = Tabs.Movement:AddRightGroupbox("Ghost Fly (Spoofed)")
 
@@ -869,33 +1034,42 @@ local function StopFly()
     Flying = false
     if FlyConnection then FlyConnection:Disconnect() end
     if NoclipConnection then NoclipConnection:Disconnect() end
+    FlyConnection = nil
+    NoclipConnection = nil
     
     local character = LocalPlayer.Character
-    if character and character:FindFirstChild("Humanoid") then
-        character.Humanoid.PlatformStand = false
-        if character:FindFirstChild("HumanoidRootPart") then
-            character.HumanoidRootPart.Anchored = false
-            character.HumanoidRootPart.Velocity = Vector3.zero 
-            character.HumanoidRootPart.AssemblyLinearVelocity = Vector3.zero
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            humanoid.PlatformStand = false
+        end
+        local hrp = character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            hrp.Anchored = false
+            hrp.Velocity = Vector3.zero 
+            hrp.AssemblyLinearVelocity = Vector3.zero
         end
     end
 end
 
 local function StartFly()
     local character = LocalPlayer.Character
-    if not character or not character:FindFirstChild("HumanoidRootPart") or not character:FindFirstChild("Humanoid") then return end
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
     
     StopFly()
     Flying = true
-    
-    local hrp = character.HumanoidRootPart
-    local humanoid = character.Humanoid
     
     humanoid.PlatformStand = true
     hrp.Anchored = true 
     
     NoclipConnection = RunService.Stepped:Connect(function()
-        for _, part in pairs(character:GetDescendants()) do
+        if not Flying then return end
+        local char = LocalPlayer.Character
+        if not char then StopFly() return end
+        for _, part in pairs(char:GetDescendants()) do
             if part:IsA("BasePart") and part.CanCollide then
                 part.CanCollide = false
             end
@@ -903,6 +1077,12 @@ local function StartFly()
     end)
     
     FlyConnection = RunService.Heartbeat:Connect(function(deltaTime)
+        if not Flying then return end
+        local char = LocalPlayer.Character
+        if not char then StopFly() return end
+        local currentHrp = char:FindFirstChild("HumanoidRootPart")
+        if not currentHrp then StopFly() return end
+        
         local moveDir = Vector3.zero
         local camCF = Camera.CFrame
         
@@ -915,24 +1095,26 @@ local function StartFly()
         
         if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
         
-        local speed = Options.GhostFlySpeed.Value
-        local newPos = hrp.Position + (moveDir * speed * deltaTime)
-        hrp.CFrame = CFrame.new(newPos, newPos + camCF.LookVector)
+        local speed = Options.GhostFlySpeed and Options.GhostFlySpeed.Value or 200
+        local newPos = currentHrp.Position + (moveDir * speed * deltaTime)
+        currentHrp.CFrame = CFrame.new(newPos, newPos + camCF.LookVector)
         
-        hrp.Velocity = Vector3.zero
-        hrp.AssemblyLinearVelocity = Vector3.zero
+        currentHrp.Velocity = Vector3.zero
+        currentHrp.AssemblyLinearVelocity = Vector3.zero
     end)
 end
 
-Toggles.GhostFlyEnabled:OnChanged(function()
-    if Toggles.GhostFlyEnabled.Value then
-        StartFly()
-    else
-        StopFly()
-    end
-end)
+if Toggles.GhostFlyEnabled then
+    Toggles.GhostFlyEnabled:OnChanged(function()
+        if Toggles.GhostFlyEnabled.Value then
+            StartFly()
+        else
+            StopFly()
+        end
+    end)
+end
 
-UserInputService.InputBegan:Connect(function(input, isTyping)
+AddConnection(UserInputService.InputBegan:Connect(function(input, isTyping)
     if isTyping then return end
     if input.KeyCode == Enum.KeyCode.W then KeysDown.W = true
     elseif input.KeyCode == Enum.KeyCode.S then KeysDown.S = true
@@ -941,9 +1123,9 @@ UserInputService.InputBegan:Connect(function(input, isTyping)
     elseif input.KeyCode == Enum.KeyCode.Space then KeysDown.Space = true
     elseif input.KeyCode == Enum.KeyCode.LeftControl then KeysDown.LeftControl = true
     end
-end)
+end))
 
-UserInputService.InputEnded:Connect(function(input, isTyping)
+AddConnection(UserInputService.InputEnded:Connect(function(input, isTyping)
     if input.KeyCode == Enum.KeyCode.W then KeysDown.W = false
     elseif input.KeyCode == Enum.KeyCode.S then KeysDown.S = false
     elseif input.KeyCode == Enum.KeyCode.A then KeysDown.A = false
@@ -951,7 +1133,7 @@ UserInputService.InputEnded:Connect(function(input, isTyping)
     elseif input.KeyCode == Enum.KeyCode.Space then KeysDown.Space = false
     elseif input.KeyCode == Enum.KeyCode.LeftControl then KeysDown.LeftControl = false
     end
-end)
+end))
 
 -- ==========================================
 -- UI SETTINGS LOGIC
@@ -959,42 +1141,60 @@ end)
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu", "wrench")
 
 MenuGroup:AddToggle("KeybindMenuOpen", {
-	Default = Library.KeybindFrame.Visible,
-	Text = "Open Keybind Menu",
-	Callback = function(value) Library.KeybindFrame.Visible = value end,
+    Default = Library.KeybindFrame.Visible,
+    Text = "Open Keybind Menu",
+    Callback = function(value) Library.KeybindFrame.Visible = value end,
 })
 MenuGroup:AddToggle("ShowCustomCursor", {
-	Text = "Custom Cursor",
-	Default = true,
-	Callback = function(Value) Library.ShowCustomCursor = Value end,
+    Text = "Custom Cursor",
+    Default = true,
+    Callback = function(Value) Library.ShowCustomCursor = Value end,
 })
 MenuGroup:AddDropdown("NotificationSide", {
-	Values = { "Left", "Right" },
-	Default = "Right",
-	Text = "Notification Side",
-	Callback = function(Value) Library:SetNotifySide(Value) end,
+    Values = { "Left", "Right" },
+    Default = "Right",
+    Text = "Notification Side",
+    Callback = function(Value) Library:SetNotifySide(Value) end,
 })
 MenuGroup:AddDropdown("DPIDropdown", {
-	Values = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" },
-	Default = "100%",
-	Text = "DPI Scale",
-	Callback = function(Value)
-		Value = Value:gsub("%%", "")
-		local DPI = tonumber(Value)
-		Library:SetDPIScale(DPI)
-	end,
+    Values = { "50%", "75%", "100%", "125%", "150%", "175%", "200%" },
+    Default = "100%",
+    Text = "DPI Scale",
+    Callback = function(Value)
+        Value = Value:gsub("%%", "")
+        local DPI = tonumber(Value)
+        if DPI then Library:SetDPIScale(DPI) end
+    end,
 })
 MenuGroup:AddSlider("UICornerSlider", {
-	Text = "Corner Radius",
-	Default = Library.CornerRadius,
-	Min = 0, Max = 20, Rounding = 0,
-	Callback = function(value) Window:SetCornerRadius(value) end
+    Text = "Corner Radius",
+    Default = Library.CornerRadius,
+    Min = 0, Max = 20, Rounding = 0,
+    Callback = function(value) Window:SetCornerRadius(value) end
 })
 
 MenuGroup:AddDivider()
 MenuGroup:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", { Default = "RightShift", NoUI = true, Text = "Menu keybind" })
 
-MenuGroup:AddButton("Unload Menu", function() Library:Unload() end)
+MenuGroup:AddButton("Unload Menu", function() 
+    -- Cleanup all connections
+    for _, conn in pairs(Connections) do
+        if conn and typeof(conn.Disconnect) == "function" then
+            pcall(function() conn:Disconnect() end)
+        end
+    end
+    -- Cleanup ESP
+    for player, _ in pairs(ESPObjects) do
+        RemoveESP(player)
+    end
+    if ChamsFolder then ChamsFolder:Destroy() end
+    -- Cleanup drawings
+    if FOVCircle then FOVCircle:Remove() end
+    if AimbotFOVCircle then AimbotFOVCircle:Remove() end
+    -- Stop fly
+    StopFly()
+    Library:Unload() 
+end)
 
 Library.ToggleKeybind = Options.MenuKeybind
 
